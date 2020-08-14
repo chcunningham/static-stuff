@@ -167,6 +167,7 @@ encodeForm.onsubmit = async (event) => {
   const fps = Number(data.get('fps'));
   const seconds = Number(data.get('seconds'));
   const bitrate = Number(data.get('bitrate'));
+  let hasError = false;
 
   canvas.width = width;
   canvas.height = height;
@@ -176,13 +177,18 @@ encodeForm.onsubmit = async (event) => {
       console.log(chunk);
     },
     error(error) {
+      hasError = true;
       console.error('VideoEncoder error', error);
     },
   });
 
   encoder.configure({
+    // Note: profile is going away soon. We should instead pass its value to 'codec'.
     codec: 'vp9',
-    profile: 'vp09.02.10.08',
+    // Profile 2 won't be supported until this commit is released
+    // https://chromiumdash.appspot.com/commit/4e15f0039d063800eb67f4e548e9edfe6d4d427b
+    // profile: 'vp09.02.10.10',
+    profile: 'vp09.00.10.08',
     bitrate,
     width,
     height,
@@ -193,17 +199,29 @@ encodeForm.onsubmit = async (event) => {
   const frameTimeDelta = 1 / fps;
   let framesEncoded = 0;
 
-  while (framesEncoded < framesToEncode) {
+  async function pushFrames() {
+    if (hasError)
+      return;
+
+    if (framesEncoded >= framesToEncode) {
+      await encoder.flush();
+      encoder.close();
+      return;
+    }
+
     console.log('Encoding', framesEncoded + 1, 'of', framesToEncode);
     render(framesEncoded * frameTimeDelta);
     const bmp = await createImageBitmap(canvas);
     const frame = new VideoFrame(bmp, {
+      timestamp: framesEncoded * frameTimeDelta,
       duration: frameTimeDelta,
     });
     encoder.encode(frame);
     framesEncoded++;
+
+    // Give encoder a chance to do the work, produce outputs, signal errors.
+    setTimeout(pushFrames, 0);
   }
 
-  await encoder.flush();
-  encoder.close();
+  pushFrames();
 };
